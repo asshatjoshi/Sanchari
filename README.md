@@ -28,6 +28,37 @@ npm run sim -- SAN-0001       # in another terminal: a fake chair
 3. Open http://localhost:3000/w/SAN-0001, enter a name and number, then unlock.
 4. In the simulator, type `out` to leave the geofence, or `mute` to see what happens when a chair doesn't respond.
 
+## Test from your phone (ngrok)
+
+To scan a chair's QR code with a real phone, the phone has to reach the server running on your laptop. [ngrok](https://ngrok.com) gives the laptop a public `https://` address, so the phone can use mobile data or any Wi-Fi. Only the server goes through ngrok. The chair (simulator or ESP32) keeps talking to the MQTT broker on your laptop.
+
+```
+Phone (any network) ──▶ ngrok ──▶ server on your laptop (port 3000) ◀──MQTT── chair / simulator
+```
+
+One-time setup:
+1. Create a free account at https://ngrok.com and install ngrok.
+2. Save your authtoken: `ngrok config add-authtoken <your-token>`. Keep it out of the repo and chats; reset it on the ngrok dashboard if it leaks.
+3. Free accounts get one fixed domain (dashboard → Domains), like `something.ngrok-free.dev`. Put it in `server/.env`:
+   ```
+   PUBLIC_URL=https://something.ngrok-free.dev
+   ```
+   QR codes from the admin page use `PUBLIC_URL`, so they keep working across restarts.
+
+Each test session, in three terminals:
+
+```bash
+cd server && npm start            # 1. server
+ngrok http 3000                   # 2. tunnel (uses your fixed domain)
+cd server && npm run sim -- SAN-0001   # 3. fake chair (or power on a real one)
+```
+
+Then open `/admin` (on the laptop, http://localhost:3000/admin), click **QR** next to the chair, and scan it with your phone. On the free plan, ngrok shows a "You are about to visit…" page the first time; tap **Visit Site**. Unlocking on the phone should flip the chair to **unlocked / in use** on the admin page within a few seconds.
+
+ngrok is for testing only. Test data passes through ngrok's servers, and it only works while your laptop is running. Production needs the server on a cloud host with its own domain and a hosted MQTT broker.
+
+Phones on the same Wi-Fi can also skip ngrok and use `http://<laptop-LAN-IP>:3000`, but guest networks and the laptop's firewall often block that (`sudo ufw allow 3000/tcp` opens it).
+
 ## Flash a real chair
 
 ```bash

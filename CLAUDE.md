@@ -15,6 +15,7 @@ Server (`cd server`):
 - `npm test` runs all tests. Single file: `node --test test/rides.test.ts`. Single test: `node --test --test-name-pattern="reboots" test/rides.test.ts`
 - `npm run typecheck`
 - `npm run sim -- SAN-0001`: fake chair speaking the real MQTT protocol (stdin commands: out, in, nofix, fix, mute, unmute, reboot, quit)
+- Phone testing: `ngrok http 3000` (ngrok is installed at `~/.local/bin/ngrok`, and the authtoken is already saved in `~/.config/ngrok/ngrok.yml`). The account has a fixed domain, and `PUBLIC_URL` in `server/.env` must match it so admin QR codes point there. Restart the server after changing `.env`. Only HTTP goes through the tunnel; chairs use the local Mosquitto on `localhost:1883`. See the README's "Test from your phone" section.
 
 Firmware (`cd firmware`):
 - `pio run`: build. `pio run -t upload && pio device monitor`: flash and watch serial.
