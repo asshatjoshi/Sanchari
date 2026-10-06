@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sanchari wheelchair</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=Baloo+2:wght@600;800&display=swap">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <main>
+    <div class="brand">Sanchari</div>
+
+    <section id="loading"><p class="muted">Loading…</p></section>
+
+    <section id="unavailable" hidden>
+      <h1>Wheelchair <span class="chair-id"></span></h1>
+      <div class="card">
+        <p id="unavailable-msg"></p>
+        <p class="muted">Please try another wheelchair or ask mall staff for help.</p>
+      </div>
+    </section>
+
+    <section id="start" hidden>
+      <h1>Wheelchair <span class="chair-id"></span></h1>
+      <p class="muted">Enter your details to unlock this wheelchair.</p>
+      <form id="start-form" class="card" novalidate>
+        <label for="name">Your name</label>
+        <input id="name" name="name" autocomplete="name" maxlength="80" required>
+        <label for="phone">Mobile number</label>
+        <input id="phone" name="phone" type="tel" inputmode="numeric" autocomplete="tel"
+               placeholder="98765 43210" required>
+        <button id="start-btn" type="submit">Unlock wheelchair</button>
+        <p id="start-error" class="error" role="alert" hidden></p>
+      </form>
+    </section>
+
+    <section id="active" hidden>
+      <h1 class="ok">Unlocked</h1>
+      <p class="muted">Wheelchair <span class="chair-id"></span> is yours. Keep this page open to end your ride.</p>
+      <div class="card">
+        <div class="muted">Ride time</div>
+        <div id="timer" class="big">0:00</div>
+        <div class="notice">Please stay inside the mall. The wheelchair locks itself if it is taken outside.</div>
+        <button id="end-btn" class="secondary" type="button">End ride and lock</button>
+        <p id="end-error" class="error" role="alert" hidden></p>
+      </div>
+    </section>
+
+    <section id="ended" hidden>
+      <h1>Ride ended</h1>
+      <div class="card">
+        <p>Thank you for using Sanchari. The wheelchair is locked.</p>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const chairId = decodeURIComponent(location.pathname.split('/').pop() || '').toUpperCase();
+    const storeKey = 'sanchari:ride:' + chairId;
+    let timerHandle;
+
+    const $ = (id) => document.getElementById(id);
+    const sections = ['loading', 'unavailable', 'start', 'active', 'ended'];
+    function show(name) {
+      for (const s of sections) $(s).hidden = s !== name;
+    }
+    document.querySelectorAll('.chair-id').forEach((el) => (el.textContent = chairId));
+
+    const store = {
+      get() { try { return localStorage.getItem(storeKey); } catch { return null; } },
+      set(v) { try { localStorage.setItem(storeKey, v); } catch {} },
+      clear() { try { localStorage.removeItem(storeKey); } catch {} },
+    };
+
+    async function api(method, path, body) {
+      const res = await fetch(path, {
+        method,
+        headers: body ? { 'Content-Type': 'application/json' } : {},
+        body: body ? JSON.stringify(body) : undefined,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Something went wrong. Please try again.');
+      return data;
+    }
+
+    function showActive(startedAt) {
+      show('active');
+      clearInterval(timerHandle);
+      const tick = () => {
+        const s = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+        const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+        $('timer').textContent = (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(sec).padStart(2, '0');
+      };
+      tick();
+      timerHandle = setInterval(tick, 1000);
+    }
+
+    async function init() {
+      // Coming back to the page during a ride (e.g. after a refresh).
+      const savedRide = store.get();
+      if (savedRide) {
+        try {
+          const ride = await api('GET', '/api/rides/' + savedRide);
+          if (ride.status === 'active') return showActive(ride.startedAt);
+        } catch {}
+        store.clear();
+      }
+
+      try {
+        const chair = await api('GET', '/api/chairs/' + encodeURIComponent(chairId));
+        if (chair.available) return show('start');
+        $('unavailable-msg').textContent =
+          chair.status === 'in_use' ? 'This wheelchair is already in use.'
+          : chair.status === 'maintenance' ? 'This wheelchair is out of service.'
+          : 'This wheelchair is offline right now.';
+      } catch (err) {
+        $('unavailable-msg').textContent = err.message;
+      }
+      show('unavailable');
+    }
+
+    $('start-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const btn = $('start-btn'), errEl = $('start-error');
+      errEl.hidden = true;
+      btn.disabled = true;
+      btn.textContent = 'Unlocking…';
+      try {
+        const ride = await api('POST', '/api/rides', {
+          chairId,
+          name: $('name').value,
+          phone: $('phone').value,
+        });
+        store.set(ride.rideId);
+        showActive(ride.startedAt);
+      } catch (err) {
+        errEl.textContent = err.message;
+        errEl.hidden = false;
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Unlock wheelchair';
+      }
+    });
+
+    $('end-btn').addEventListener('click', async () => {
+      if (!confirm('End your ride and lock the wheelchair?')) return;
+      const btn = $('end-btn'), errEl = $('end-error');
+      errEl.hidden = true;
+      btn.disabled = true;
+      btn.textContent = 'Locking…';
+      try {
+        await api('POST', '/api/rides/' + store.get() + '/end');
+        store.clear();
+        clearInterval(timerHandle);
+        show('ended');
+      } catch (err) {
+        errEl.textContent = err.message;
+        errEl.hidden = false;
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'End ride and lock';
+      }
+    });
+
+    init();
+  </script>
+</body>
+</html>

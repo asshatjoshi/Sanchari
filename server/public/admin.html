@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sanchari admin</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=Baloo+2:wght@600;800&display=swap">
+  <link rel="stylesheet" href="/style.css">
+  <style>
+    main { max-width: 1100px; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+    th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--border); vertical-align: top; }
+    th { color: var(--muted); font-weight: 600; }
+    .table-wrap { overflow-x: auto; }
+    td button { width: auto; margin: 0 4px 4px 0; padding: 6px 10px; font-size: 0.85rem; }
+    .row { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; }
+    .pill { display: inline-block; padding: 1px 8px; border-radius: 99px; font-size: 0.8rem; border: 1px solid var(--border); }
+    .pill.good { color: var(--ok); border-color: currentColor; }
+    .pill.bad { color: var(--danger); border-color: currentColor; }
+    .events { font-family: ui-monospace, monospace; font-size: 0.8rem; max-height: 320px; overflow: auto; }
+    form button { width: auto; }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="brand">Sanchari<small>admin</small></div>
+
+    <section id="login" class="card" hidden>
+      <h2>Sign in</h2>
+      <form id="login-form">
+        <label for="token">Admin token</label>
+        <input id="token" type="password" autocomplete="current-password" required>
+        <button type="submit">Sign in</button>
+        <p id="login-error" class="error" hidden></p>
+      </form>
+    </section>
+
+    <section id="dash" hidden>
+      <div class="card">
+        <h2>Wheelchairs</h2>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Chair</th><th>Status</th><th>Lock</th><th>GPS</th><th>Battery</th><th>Ride</th><th>Actions</th></tr></thead>
+            <tbody id="chairs"></tbody>
+          </table>
+        </div>
+        <p id="action-msg" class="muted"></p>
+      </div>
+
+      <div class="row">
+        <form id="chair-form" class="card">
+          <h2>Add or edit a chair</h2>
+          <label for="chair-id">Chair ID</label>
+          <input id="chair-id" placeholder="SAN-0001" required>
+          <label for="chair-label">Label (optional)</label>
+          <input id="chair-label" placeholder="Phoenix Mall, Gate 2">
+          <label for="chair-fence">Geofence</label>
+          <select id="chair-fence"></select>
+          <button type="submit">Save chair</button>
+          <p id="chair-error" class="error" hidden></p>
+        </form>
+
+        <form id="fence-form" class="card">
+          <h2>Geofences</h2>
+          <p class="muted">Draw the mall boundary at <a href="https://geojson.io" target="_blank" rel="noopener">geojson.io</a> and paste the GeoJSON, or paste <code>[[lat, lng], …]</code>.</p>
+          <label for="fence-select">Edit</label>
+          <select id="fence-select"></select>
+          <label for="fence-name">Name</label>
+          <input id="fence-name" placeholder="Phoenix Mall" required>
+          <label for="fence-polygon">Boundary</label>
+          <textarea id="fence-polygon" required></textarea>
+          <button type="submit">Save geofence</button>
+          <p id="fence-error" class="error" hidden></p>
+        </form>
+      </div>
+
+      <div class="card">
+        <h2>Recent events</h2>
+        <div id="events" class="events"></div>
+      </div>
+      <button id="logout" class="secondary" type="button" style="width:auto">Sign out</button>
+    </section>
+  </main>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const tokenKey = 'sanchari:admin-token';
+    const getToken = () => { try { return localStorage.getItem(tokenKey) || ''; } catch { return ''; } };
+    const setToken = (t) => { try { t ? localStorage.setItem(tokenKey, t) : localStorage.removeItem(tokenKey); } catch {} };
+    let fences = [];
+    let refreshHandle;
+
+    // Builds DOM nodes; text is always set via textContent (rider names are user input).
+    function el(tag, props = {}, ...children) {
+      const node = document.createElement(tag);
+      for (const [k, v] of Object.entries(props)) {
+        if (k.startsWith('on')) node.addEventListener(k.slice(2), v);
+        else if (k === 'class') node.className = v;
+        else node[k] = v;
+      }
+      for (const c of children) if (c != null) node.append(c instanceof Node ? c : String(c));
+      return node;
+    }
+
+    async function api(method, path, body) {
+      const res = await fetch(path, {
+        method,
+        headers: { Authorization: 'Bearer ' + getToken(), ...(body ? { 'Content-Type': 'application/json' } : {}) },
+        body: body ? JSON.stringify(body) : undefined,
+      });
+      const data = res.headers.get('content-type')?.includes('json') ? await res.json() : await res.text();
+      if (res.status === 401) { showLogin('Wrong or missing admin token'); throw new Error('Unauthorized'); }
+      if (!res.ok) throw new Error(data.error || 'Request failed');
+      return data;
+    }
+
+    function showLogin(msg) {
+      clearInterval(refreshHandle);
+      $('dash').hidden = true;
+      $('login').hidden = false;
+      $('login-error').hidden = !msg;
+      $('login-error').textContent = msg || '';
+    }
+
+    const ago = (ts) => {
+      if (!ts) return 'never';
+      const s = Math.round((Date.now() - ts) / 1000);
+      return s < 60 ? s + 's ago' : s < 3600 ? Math.round(s / 60) + 'm ago' : Math.round(s / 3600) + 'h ago';
+    };
+    const pill = (text, cls) => el('span', { class: 'pill ' + (cls || '') }, text);
+
+    async function act(label, fn) {
+      $('action-msg').textContent = label + '…';
+      try {
+        await fn();
+        $('action-msg').textContent = label + ': done';
+      } catch (err) {
+        $('action-msg').textContent = label + ': ' + err.message;
+      }
+      refresh();
+    }
+
+    function renderChairs(chairs) {
+      const rows = chairs.map((c) => {
+        const actions = el('td', {},
+          el('button', { class: 'secondary', onclick: () => act('Unlock ' + c.id, () => api('POST', `/api/admin/chairs/${c.id}/unlock`)) }, 'Unlock'),
+          el('button', { class: 'secondary', onclick: () => act('Lock ' + c.id, () => api('POST', `/api/admin/chairs/${c.id}/lock`)) }, 'Lock'),
+          c.ride && el('button', { class: 'danger', onclick: () => confirm('Force-end this ride?') && act('End ride', () => api('POST', `/api/admin/rides/${c.ride.id}/end`)) }, 'End ride'),
+          c.status !== 'in_use' && el('button', { class: 'secondary', onclick: () => act('Update ' + c.id, () => api('PUT', `/api/admin/chairs/${c.id}`, { status: c.status === 'maintenance' ? 'available' : 'maintenance' })) },
+            c.status === 'maintenance' ? 'Back in service' : 'Maintenance'),
+          el('button', { class: 'secondary', onclick: () => openQr(c.id) }, 'QR'),
+        );
+        return el('tr', {},
+          el('td', {}, el('strong', {}, c.id), el('br'), el('span', { class: 'muted' }, c.label || '')),
+          el('td', {},
+            pill(c.online ? 'online' : 'offline', c.online ? 'good' : 'bad'), ' ',
+            pill(c.status.replace('_', ' ')), ' ',
+            c.outside_fence ? pill('OUTSIDE FENCE', 'bad') : null,
+            el('br'), el('span', { class: 'muted' }, 'seen ' + ago(c.last_seen))),
+          el('td', {}, c.lock_state || '–'),
+          el('td', {}, c.gps_fix ? `${c.lat.toFixed(5)}, ${c.lng.toFixed(5)}` : (c.lat != null ? 'no fix (last ' + c.lat.toFixed(4) + ', ' + c.lng.toFixed(4) + ')' : 'no fix')),
+          el('td', {}, c.batt != null ? c.batt.toFixed(1) + ' V' : '–'),
+          el('td', {}, ...(c.ride ? [c.ride.name, el('br'), c.ride.phone, el('br'), el('span', { class: 'muted' }, 'since ' + ago(c.ride.startedAt))] : ['–'])),
+          actions,
+        );
+      });
+      $('chairs').replaceChildren(...(rows.length ? rows : [el('tr', {}, el('td', { colSpan: 7, class: 'muted' }, 'No chairs yet. Add one below.'))]));
+    }
+
+    async function openQr(id) {
+      const res = await fetch(`/api/admin/chairs/${id}/qr.svg`, { headers: { Authorization: 'Bearer ' + getToken() } });
+      const url = URL.createObjectURL(await res.blob());
+      window.open(url, '_blank');
+    }
+
+    function renderFences() {
+      const opts = (blankLabel) => [el('option', { value: '' }, blankLabel), ...fences.map((f) => el('option', { value: f.id }, f.name))];
+      const chairSel = $('chair-fence').value;
+      $('chair-fence').replaceChildren(...opts('No geofence'));
+      $('chair-fence').value = chairSel;
+      const fenceSel = $('fence-select').value;
+      $('fence-select').replaceChildren(...opts('+ New geofence'));
+      $('fence-select').value = fenceSel;
+    }
+
+    async function refresh() {
+      try {
+        const [chairs, f, events] = await Promise.all([
+          api('GET', '/api/admin/chairs'),
+          api('GET', '/api/admin/geofences'),
+          api('GET', '/api/admin/events?limit=40'),
+        ]);
+        fences = f;
+        renderChairs(chairs);
+        renderFences();
+        $('events').replaceChildren(...events.map((e) =>
+          el('div', {}, `${new Date(e.ts).toLocaleTimeString()}  ${e.chair_id}  ${e.type}`)));
+      } catch {}
+    }
+
+    function showDash() {
+      $('login').hidden = true;
+      $('dash').hidden = false;
+      refresh();
+      clearInterval(refreshHandle);
+      refreshHandle = setInterval(refresh, 5000);
+    }
+
+    async function submitForm(errId, fn) {
+      $(errId).hidden = true;
+      try { await fn(); refresh(); }
+      catch (err) { $(errId).textContent = err.message; $(errId).hidden = false; }
+    }
+
+    $('login-form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      setToken($('token').value.trim());
+      showDash();
+    });
+    $('logout').addEventListener('click', () => { setToken(''); showLogin(); });
+
+    $('chair-form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      submitForm('chair-error', () => api('PUT', '/api/admin/chairs/' + encodeURIComponent($('chair-id').value.trim().toUpperCase()), {
+        label: $('chair-label').value.trim(),
+        geofenceId: $('chair-fence').value ? Number($('chair-fence').value) : null,
+      }));
+    });
+
+    $('fence-select').addEventListener('change', () => {
+      const f = fences.find((x) => String(x.id) === $('fence-select').value);
+      $('fence-name').value = f ? f.name : '';
+      $('fence-polygon').value = f ? JSON.stringify(f.polygon) : '';
+    });
+
+    $('fence-form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      submitForm('fence-error', async () => {
+        let polygon;
+        try { polygon = JSON.parse($('fence-polygon').value); }
+        catch { throw new Error('Boundary is not valid JSON'); }
+        const id = $('fence-select').value;
+        const body = { name: $('fence-name').value, polygon };
+        const saved = await api(id ? 'PUT' : 'POST', '/api/admin/geofences' + (id ? '/' + id : ''), body);
+        await refresh();
+        $('fence-select').value = saved.id;
+        $('fence-polygon').value = JSON.stringify(saved.polygon);
+      });
+    });
+
+    getToken() ? showDash() : showLogin();
+  </script>
+</body>
+</html>

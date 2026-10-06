@@ -1,0 +1,13 @@
+# Server
+node_modules/
+server/data/
+.env
+
+# Firmware
+firmware/.pio/
+firmware/include/secrets.h
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
