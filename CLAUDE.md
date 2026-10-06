@@ -6,6 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Sanchari: self-service wheelchair rental in malls. A rider scans the QR code on a chair, opens `/w/<chairId>`, enters name and phone, and the server tells the chair's ESP32 over MQTT to energise a solenoid and unlock it. A NEO-7M GPS feeds a geofence. MVP scope only: no OTP or payments yet (planned later).
 
+**Read `docs/story.md` at the start of each session.** It's the plain-English record of what's been built, why each decision was made, what was discussed with the user, and which questions are still open. When the user asks to update it, add to its dated log and keep its simple-first style.
+
 ## Commands
 
 Node and PlatformIO are installed per-user (`~/.local/node/bin`, `~/.platformio/penv/bin`); add them to `PATH` if a non-login shell can't find them.
